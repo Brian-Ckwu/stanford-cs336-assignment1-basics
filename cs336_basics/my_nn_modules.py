@@ -44,3 +44,31 @@ class Embedding(nn.Module):
     ) -> Float[torch.Tensor, "batch_size sequence_length embedding_dim"]:
         # Paralleled selection of embedding vectors for all batch_size * sequence_length operations
         return self.weight[token_ids]
+
+class RMSNorm(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        eps: float = 1e-5,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ):
+        super().__init__()
+        self.d_model = d_model
+        self.eps = eps
+        self.weight = nn.Parameter(
+            data=torch.ones(size=(d_model,), device=device, dtype=dtype)
+        )
+
+    def forward(
+        self,
+        x: Float[torch.Tensor, "B L d"]  # batch_size, sequence_length, d_model
+    ) -> Float[torch.Tensor, "B L d"]:
+        if x.shape[-1] != self.d_model:
+            raise ValueError(f"The last dimension of x (shape={x.shape}) should be {self.d_model}")
+        in_dtype = x.dtype
+        x = x.to(torch.float32)  # float16 can only represent +-65504, so it can easily overflow when an activation exceeds 256
+        rms = ((x**2).sum(dim=-1) / self.d_model + self.eps)**0.5  # Since RMS should be calculated from each token vector, `rms` should have shape (B, L) if x has shape (B, L, d)
+        rms = einops.rearrange(rms, "... -> ... 1")  # rearrange for broadcasting
+        out = x / rms * self.weight
+        return out.to(in_dtype)  # remember to cast back to the original dtype
